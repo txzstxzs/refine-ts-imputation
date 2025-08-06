@@ -9,8 +9,6 @@ from einops import rearrange, reduce
 from scipy.fftpack import next_fast_len
 
 
-'主要保存减噪网络的相关模块'
-
 
 def exists(x):
     return x is not None
@@ -24,7 +22,6 @@ def identity(t, *args, **kwargs):
     return t
 
 
-'用于提取扩散步t对应的alpha等扩散参数'
 def extract(a, t, x_shape):
     b, *_ = t.shape
     out = a.gather(-1, t)
@@ -66,7 +63,6 @@ class SinusoidalPosEmb(nn.Module):
         return emb
 
 
-# pe嵌入 嵌入结果要加上原数据  learnable positional embeds
 class LearnablePositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=1024):
         super(LearnablePositionalEncoding, self).__init__()
@@ -188,7 +184,7 @@ class GELU2(nn.Module):
         return x * F.sigmoid(1.702 * x)
 
     
-'扩散步嵌入 + 层归一化'
+
 class AdaLayerNorm(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
@@ -208,7 +204,7 @@ class AdaLayerNorm(nn.Module):
         if label_emb is not None:
             emb = emb + label_emb
             
-        emb = self.linear(self.silu(emb)).unsqueeze(1)   # 扩散步的嵌入 
+        emb = self.linear(self.silu(emb)).unsqueeze(1)   
         scale, shift = torch.chunk(emb, 2, dim=2)
         x = self.layernorm(x) * (1 + scale) + shift
         return x

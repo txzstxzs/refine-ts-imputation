@@ -8,10 +8,7 @@ from einops import rearrange, reduce, repeat
 from Models.interpretable_diffusion.model_utils import LearnablePositionalEncoding, Conv_MLP,\
                                                        AdaLayerNorm, Transpose, GELU2, series_decomp
 
-'主要保存序列分解相关模块'
 
-
-'用多项式回归建模趋势'
 class TrendBlock(nn.Module):
     """
     Model trend of time series using the polynomial regressor.
@@ -23,7 +20,7 @@ class TrendBlock(nn.Module):
         
         self.trend = nn.Sequential(
             nn.Conv1d(in_channels=in_dim, out_channels=trend_poly, kernel_size=3, padding=1),
-            act,                          # 激活函数gelu
+            act,                          
             Transpose(shape=(1, 2)),
             nn.Conv1d(in_feat, out_feat, 3, stride=1, padding=1)
         )
@@ -32,15 +29,14 @@ class TrendBlock(nn.Module):
         
         self.poly_space = torch.stack([lin_space ** float(p + 1) for p in range(trend_poly)], dim=0)
 
-    def forward(self, input):                 # 输入是transformer加conv后的结果
+    def forward(self, input):                
         b, c, h = input.shape
-        x = self.trend(input).transpose(1, 2)     # 应该是公式3的linear  不包括右边的均值  加均值在最后加上  在470行左右位置
-        trend_vals = torch.matmul(x.transpose(1, 2), self.poly_space.to(x.device))  # 公式3里乘以C
+        x = self.trend(input).transpose(1, 2)     
+        trend_vals = torch.matmul(x.transpose(1, 2), self.poly_space.to(x.device))  
         trend_vals = trend_vals.transpose(1, 2)
         return trend_vals
     
-    
-'用移动平均建模趋势'
+
 class MovingBlock(nn.Module):
     """
     Model trend of time series using the moving average.
@@ -56,7 +52,7 @@ class MovingBlock(nn.Module):
         return x, trend_vals
 
 
-'用反傅里叶变换建模周期 选topk个基函数  应该是ETSformer的方法'
+
 class FourierLayer(nn.Module):
     """
     Model seasonality of time series using the inverse DFT.
@@ -106,7 +102,7 @@ class FourierLayer(nn.Module):
     
     
     
-'用傅里叶基函数建模周期  应该是nbeats里的方法'
+
 class SeasonBlock(nn.Module):
     """
     Model seasonality of time series using the Fourier series.
@@ -214,7 +210,7 @@ class CrossAttention(nn.Module):
     
     
     
-'单个编码器模块'
+
 class EncoderBlock(nn.Module):
     """ an unassuming Transformer block """
     def __init__(self,
@@ -227,7 +223,7 @@ class EncoderBlock(nn.Module):
                  ):
         super().__init__()
 
-        self.ln1 = AdaLayerNorm(n_embd)   # 扩散步嵌入 + 层归一化
+        self.ln1 = AdaLayerNorm(n_embd)   
         self.ln2 = nn.LayerNorm(n_embd)
         self.attn = FullAttention(
                 n_embd=n_embd,
@@ -249,14 +245,13 @@ class EncoderBlock(nn.Module):
     def forward(self, x, timestep, d=None, mask=None, label_emb=None):
         a, att = self.attn( self.ln1(x, timestep, d, label_emb), mask=mask )  
         x = x + a
-        x = x + self.mlp(self.ln2(x))          # 编码器里的FFN  only one really use encoder_output
-        return x, att                    # 下一层的输入和注意力图
+        x = x + self.mlp(self.ln2(x))          
+        return x, att                    
 
     
     
     
-    
-'整个编码器模块'
+
 class Encoder(nn.Module):
     def __init__(
         self,
@@ -288,7 +283,7 @@ class Encoder(nn.Module):
 
 
     
-'单个解码器组件'
+
 class DecoderBlock(nn.Module):
     """ an unassuming Transformer block """
     def __init__(self,
@@ -344,25 +339,25 @@ class DecoderBlock(nn.Module):
         
     def forward(self, x, encoder_output, timestep, d=None, mask=None, label_emb=None):
         
-        a, att = self.attn1(self.ln1(x, timestep, d, label_emb), mask=mask)     # 这四行就是一个transformer  两个注意力 一个交叉注意力 融入编码器信息
+        a, att = self.attn1(self.ln1(x, timestep, d, label_emb), mask=mask)     
         x = x + a
         a, att = self.attn2(self.ln1_1(x, timestep, d ), encoder_output, mask=mask)
         x = x + a
         
-        #分成两路 一路计算周期和趋势  一路进入FFN
-        x1, x2 = self.proj(x).chunk(2, dim=1)         # 这一路计算趋势和周期
+        
+        x1, x2 = self.proj(x).chunk(2, dim=1)        
         trend, season = self.trend(x1), self.seasonal(x2)
         
-        x = x + self.mlp(self.ln2(x))              # 这一路进入FFN
-        m = torch.mean(x, dim=1, keepdim=True)        # 需要算一次均值 与上面的x相减 作为下一个模块的输入
+        x = x + self.mlp(self.ln2(x))             
+        m = torch.mean(x, dim=1, keepdim=True)        
         
-        return x - m, self.linear(m), trend, season     # x-m作为下一个模块的输入  m经过线性层应该是为了扩维 然后累积与趋势相加
+        return x - m, self.linear(m), trend, season     
     
     
     
     
 
-'整个解码器'
+
 class Decoder(nn.Module):
     def __init__(
         self,
@@ -408,8 +403,8 @@ class Decoder(nn.Module):
             trend += residual_trend
             mean.append(residual_mean)
 
-        mean = torch.cat(mean, dim=1)         # mean累积后与趋势相加
-        return x, mean, trend, season         # x是最后一个本应作为下一个组件的输入
+        mean = torch.cat(mean, dim=1)         
+        return x, mean, trend, season        
 
 
 class Transformer(nn.Module):
@@ -456,24 +451,23 @@ class Transformer(nn.Module):
 
     def forward(self, input, t, d=None, padding_masks=None):
         
-        emb = self.emb(input)                   # 第一个mlp卷积
+        emb = self.emb(input)                  
         
-        inp_enc = self.pos_enc(emb)               # 第一个编码器的pe
+        inp_enc = self.pos_enc(emb)               
         
-        enc_cond = self.encoder(inp_enc, t, d=d, padding_masks=padding_masks)  # 输入编码器 监督信息
+        enc_cond = self.encoder(inp_enc, t, d=d, padding_masks=padding_masks)  
 
-        inp_dec = self.pos_dec(emb)               # 解码器的pe
+        inp_dec = self.pos_dec(emb)               
         
         output, mean, trend, season = self.decoder(inp_dec, t, enc_cond, d=d, padding_masks=padding_masks)
 
-        res = self.inverse(output)               # output是最后一个模块的输入 本来是用于下一个模块的输入
-        res_m = torch.mean(res, dim=1, keepdim=True)   # 最后一个均值 即使是最后一个输入 也要计算均值 然后就相减 x-m 和DecoderBlock里一样
-                                        # 体现为下面的 res - res_m 
+        res = self.inverse(output)               
+        res_m = torch.mean(res, dim=1, keepdim=True)   
+                                        
         
-        '加上res的操作应该是周期相加处的加号 上面的虚线输入'
+        
         season_error = self.combine_s(season.transpose(1, 2)).transpose(1, 2) + res - res_m
         
-        '累积的mean与趋势相加 应该是公式3的右项  还要加上最后一个mean 因为这个mean没有来得及和之前的mean拼接'
         trend = self.combine_m(mean) + res_m + trend     
 
         return trend, season_error

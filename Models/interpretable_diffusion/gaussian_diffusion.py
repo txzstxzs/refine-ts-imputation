@@ -9,7 +9,7 @@ from functools import partial
 from Models.interpretable_diffusion.transformer import Transformer
 from Models.interpretable_diffusion.model_utils import default, identity, extract
 
-'这里主要是扩散的加减噪过程'
+
 # gaussian diffusion trainer class
 
 def linear_beta_schedule(timesteps):
@@ -64,7 +64,6 @@ class Diffusion_TS(nn.Module):
         self.ff_weight = default(reg_weight, math.sqrt(self.seq_length) / 5)
 
         
-        '-----主要模型  输入加噪数据xt  输出预测的x0  用趋势和周期表示-----'
         self.model = Transformer(n_feat=feature_size, n_channel=seq_length, n_layer_enc=n_layer_enc, n_layer_dec=n_layer_dec,
                                  n_heads=n_heads, attn_pdrop=attn_pd, resid_pdrop=resid_pd, mlp_hidden_times=mlp_hidden_times,
                                  max_len=seq_length, n_embd=d_model, conv_params=[kernel_size, padding_size], **kwargs)
@@ -90,12 +89,11 @@ class Diffusion_TS(nn.Module):
         self.sampling_timesteps = default(
             sampling_timesteps, timesteps)  # default num sampling timesteps to number of timesteps at training
 
-        assert self.sampling_timesteps <= timesteps           # 用的采样步应该小于等于扩散步数
-        self.fast_sampling = self.sampling_timesteps < timesteps  # 若采样步小 则用ddim采样
+        assert self.sampling_timesteps <= timesteps          
+        self.fast_sampling = self.sampling_timesteps < timesteps  
 
         # helper function to register buffer from float64 to float32
 
-        'register_buffer的作用是保存该变量不变 不随模型更新而更新 作为self的属性 同时放到GPU上 '
         register_buffer = lambda name, val: self.register_buffer(name, val.to(torch.float32))
 
         register_buffer('betas', betas)
@@ -129,7 +127,6 @@ class Diffusion_TS(nn.Module):
         register_buffer('loss_weight', torch.sqrt(alphas) * torch.sqrt(1. - alphas_cumprod) / betas / 100)
 
         
-    '已知x0 xt 计算噪声'    
     def predict_noise_from_start(self, x_t, t, x0):
         return (
                 (extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - x0) /
@@ -137,66 +134,60 @@ class Diffusion_TS(nn.Module):
         )
     
     
-    '已知噪声 xt  计算x0'
     def predict_start_from_noise(self, x_t, t, noise):
         return (
             extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t -
             extract(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
         )
 
-    '已知x0 xt  计算xt-1的均值和方差'
     def q_posterior(self, x_start, x_t, t):
         posterior_mean = (
                 extract(self.posterior_mean_coef1, t, x_t.shape) * x_start +
                 extract(self.posterior_mean_coef2, t, x_t.shape) * x_t
         )
-        posterior_variance = extract(self.posterior_variance, t, x_t.shape)  # 方差应该是固定的
+        posterior_variance = extract(self.posterior_variance, t, x_t.shape)  
         posterior_log_variance_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape)
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
     
     
-    '输入xt 预测x0  用趋势和周期表示  '
     def output(self, x, t, d=None, padding_masks=None):
         trend, season = self.model(x, t, d=d, padding_masks=padding_masks)
         model_output = trend + season
         return model_output
 
     
-    '预测x0 和对应的噪声'
     def model_predictions(self, x, t, clip_x_start=False, padding_masks=None):
         if padding_masks is None:
             padding_masks = torch.ones(x.shape[0], self.seq_length, dtype=bool, device=x.device)
 
         maybe_clip = partial(torch.clamp, min=-1., max=1.) if clip_x_start else identity
-        x_start = self.output(x, t, padding_masks)              # 预测x0
+        x_start = self.output(x, t, padding_masks)              
         x_start = maybe_clip(x_start)
-        pred_noise = self.predict_noise_from_start(x, t, x_start)    # 计算加到xt上的噪声 后面没有用到
+        pred_noise = self.predict_noise_from_start(x, t, x_start)    
         return pred_noise, x_start
 
     
-    '计算xt-1的均值和方差'
     def p_mean_variance(self, x, t, clip_denoised=True):
         
-        _, x_start = self.model_predictions(x, t)   # 模型预测的x0 
+        _, x_start = self.model_predictions(x, t)   
         
         if clip_denoised:
             x_start.clamp_(-1., 1.)
             
         model_mean, posterior_variance, posterior_log_variance = \
-            self.q_posterior(x_start=x_start, x_t=x, t=t)      # 用预测的x0计算xt-1
+            self.q_posterior(x_start=x_start, x_t=x, t=t)      
         
         return model_mean, posterior_variance, posterior_log_variance, x_start
 
     
-    '计算xt-1和一步估计的x0'
     def p_sample(self, x, t: int, clip_denoised=True):
-        batched_times = torch.full((x.shape[0],), t, device=x.device, dtype=torch.long)  # 扩散步加维度
+        batched_times = torch.full((x.shape[0],), t, device=x.device, dtype=torch.long)  
         
         model_mean, _, model_log_variance, x_start = \
-            self.p_mean_variance(x=x, t=batched_times, clip_denoised=clip_denoised)   # 计算xt-1的均值和方差 这里计算的是对数方差 后面要加指数e变成方差
+            self.p_mean_variance(x=x, t=batched_times, clip_denoised=clip_denoised)   
         
         noise = torch.randn_like(x) if t > 0 else 0.  # no noise if t == 0
-        pred_img = model_mean + (0.5 * model_log_variance).exp() * noise   # 计算xt-1  均值加标准差 右边化简后就是标准差
+        pred_img = model_mean + (0.5 * model_log_variance).exp() * noise   
         return pred_img, x_start
 
     
@@ -246,10 +237,10 @@ class Diffusion_TS(nn.Module):
         return img
 
     
-    '开始采样'
+    
     def generate_mts(self, batch_size=16):
         feature_size, seq_length = self.feature_size, self.seq_length
-        sample_fn = self.fast_sample if self.fast_sampling else self.sample   # ddpm还是ddpm采样
+        sample_fn = self.fast_sample if self.fast_sampling else self.sample   
         return sample_fn((batch_size, seq_length, feature_size))
 
     
@@ -264,15 +255,15 @@ class Diffusion_TS(nn.Module):
             raise ValueError(f'invalid loss type {self.loss_type}')
 
             
-    '前向加噪 用x0计算xt'        
+    
     def q_sample(self, x_start, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         return (
                 extract(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start +
                 extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise )
-                                                            # extract用于提取扩散步t对应的alpha等扩散参数
-    
-    '输入数据 开始训练 '
+                                                            
+
+
     def forward(self, x, **kwargs):
         b, c, n, device, feature_size, = *x.shape, x.device, self.feature_size
         assert n == feature_size, f'number of variable must be {feature_size}'
@@ -280,20 +271,20 @@ class Diffusion_TS(nn.Module):
         return self._train_loss(x_start=x, t=t, **kwargs)
     
     
-    '预测x0训练法'
+    
     def _train_loss(self, x_start, t, target=None, noise=None, padding_masks=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
         if target is None:
             target = x_start
 
-        x = self.q_sample(x_start=x_start, t=t, noise=noise)         # 前向加噪 x0计算xt  noise sample
+        x = self.q_sample(x_start=x_start, t=t, noise=noise)         
         
-        model_out = self.output(x, t, padding_masks)              # 预测x0 表示为趋势和周期相加
+        model_out = self.output(x, t, padding_masks)              
 
-        train_loss = self.loss_fn(model_out, target, reduction='none')  # 计算损失  
+        train_loss = self.loss_fn(model_out, target, reduction='none')  
 
         fourier_loss = torch.tensor([0.])
-        if self.use_ff:                                  # 计算x0的频域损失
+        if self.use_ff:                                  
             fft1 = torch.fft.fft(model_out.transpose(1, 2), norm='forward')
             fft2 = torch.fft.fft(target.transpose(1, 2), norm='forward')
             fft1, fft2 = fft1.transpose(1, 2), fft2.transpose(1, 2)
@@ -319,7 +310,7 @@ class Diffusion_TS(nn.Module):
     
     
     
-    'dps采样 ddim'
+    
     def fast_sample_infill(self, shape, target, sampling_timesteps, partial_mask=None, clip_denoised=True, model_kwargs=None):
         batch, device, total_timesteps, eta = shape[0], self.betas.device, self.num_timesteps, self.eta
 
@@ -356,12 +347,12 @@ class Diffusion_TS(nn.Module):
         return img
 
     
-    'dps采样  ddpm'
+
     def sample_infill(
         self,
         shape, 
-        target,                  # 观测值
-        partial_mask=None,           # 缺失掩码
+        target,                 
+        partial_mask=None,          
         clip_denoised=True,
         model_kwargs=None,
     ):
@@ -385,28 +376,28 @@ class Diffusion_TS(nn.Module):
         target,
         t: int,
         partial_mask=None,
-        x_self_cond=None,        # 这个没用上
+        x_self_cond=None,        
         clip_denoised=True,
         model_kwargs=None
     ):
         b, *_, device = *x.shape, self.betas.device
         batched_times = torch.full((x.shape[0],), t, device=x.device, dtype=torch.long)
         model_mean, _, model_log_variance, _ = \
-            self.p_mean_variance(x=x, t=batched_times, x_self_cond=x_self_cond, clip_denoised=clip_denoised)  # 输入xt 计算xt-1的均值方差
+            self.p_mean_variance(x=x, t=batched_times, x_self_cond=x_self_cond, clip_denoised=clip_denoised)  
         noise = torch.randn_like(x) if t > 0 else 0.  # no noise if t == 0
         sigma = (0.5 * model_log_variance).exp()
-        pred_img = model_mean + sigma * noise           # 计算xt-1
-                                            # 这里应该是根据dps 计算梯度 来微调之前计算的xt-1 微调缺失部分
+        pred_img = model_mean + sigma * noise          
+                                            
         pred_img = self.langevin_fn(sample=pred_img, mean=model_mean, sigma=sigma, t=batched_times,
                                     tgt_embs=target, partial_mask=partial_mask, **model_kwargs)
         
-        target_t = self.q_sample(target, t=batched_times)   # 对观测值加噪
-        pred_img[partial_mask] = target_t[partial_mask]    # 观测值处保持一致  缺失部分已微调
+        target_t = self.q_sample(target, t=batched_times)   
+        pred_img[partial_mask] = target_t[partial_mask]    
 
         return pred_img
 
     
-    '应该是dps计算修正梯度'
+
     def langevin_fn(
         self,
         coef,
@@ -420,7 +411,7 @@ class Diffusion_TS(nn.Module):
         coef_=0.
     ):
     
-        if t[0].item() < self.num_timesteps * 0.05:   # k是dps里用梯度更新xt-1的次数
+        if t[0].item() < self.num_timesteps * 0.05:   
             K = 0
         elif t[0].item() > self.num_timesteps * 0.9:
             K = 3
@@ -431,14 +422,14 @@ class Diffusion_TS(nn.Module):
             K = 1
             learning_rate = learning_rate * 0.25
 
-        input_embs_param = torch.nn.Parameter(sample)   # 把xt-1看成可更新参数 用观测一致性损失来调整
+        input_embs_param = torch.nn.Parameter(sample)  
 
         with torch.enable_grad():
-            for i in range(K):                 # dps的更新次数
-                optimizer = torch.optim.Adagrad([input_embs_param], lr=learning_rate)  # xt-1的优化器
+            for i in range(K):                 
+                optimizer = torch.optim.Adagrad([input_embs_param], lr=learning_rate)  
                 optimizer.zero_grad()
 
-                x_start = self.output(x=input_embs_param, t=t)   # 输入xt-1预测x0  和观测值计算观测一致性损失
+                x_start = self.output(x=input_embs_param, t=t)   
 
                 if sigma.mean() == 0:
                     logp_term = coef * ((mean - input_embs_param) ** 2 / 1.).mean(dim=0).sum()
@@ -446,16 +437,16 @@ class Diffusion_TS(nn.Module):
                     infill_loss = infill_loss.mean(dim=0).sum()
                 else:
                     logp_term = coef * ((mean - input_embs_param)**2 / sigma).mean(dim=0).sum()  
-                    infill_loss = (x_start[partial_mask] - tgt_embs[partial_mask]) ** 2       # 观测一致性损失  用该损失调整xt-1
+                    infill_loss = (x_start[partial_mask] - tgt_embs[partial_mask]) ** 2       
                     infill_loss = (infill_loss/sigma.mean()).mean(dim=0).sum()
             
                 loss = logp_term + infill_loss
                 loss.backward()
                 optimizer.step()
                 epsilon = torch.randn_like(input_embs_param.data)
-                input_embs_param = torch.nn.Parameter((input_embs_param.data + coef_ * sigma.mean().item() * epsilon).detach())  # 用损失的梯度更新xt-1
+                input_embs_param = torch.nn.Parameter((input_embs_param.data + coef_ * sigma.mean().item() * epsilon).detach())  
 
-        sample[~partial_mask] = input_embs_param.data[~partial_mask]   # 替换更新后xt-1的缺失部分  
+        sample[~partial_mask] = input_embs_param.data[~partial_mask]   
         return sample
     
 
